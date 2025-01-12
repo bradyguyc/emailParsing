@@ -47,20 +47,21 @@ namespace EmailParser
             await File.WriteAllTextAsync(fileName, emailContent);
         }
 
-        private static async Task ProcessMessagePageAsync(IList<Message> messages, string emailDirectory, int pageNumber)
+        private static async Task<int> ProcessMessagePageAsync(IList<Message> messages, string emailDirectory, int pageNumber, ConcurrentBag<(int PageNumber, long ElapsedTime, int EmailCount)> stopwatchBag)
         {
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
+            var stopwatch = Stopwatch.StartNew();
 
-            foreach (var item in messages)
-            {
-                ProcessMessageAsync(item, emailDirectory);
-                
-            } 
-           
+            var tasks = messages.Select(message => ProcessMessageAsync(message, emailDirectory));
+            await Task.WhenAll(tasks);
+
+            stopwatch.Stop();
             var elapsedTime = stopwatch.ElapsedMilliseconds;
-            Console.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
-            Debug.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
+            var emailCount = messages.Count;
+            stopwatchBag.Add((pageNumber, elapsedTime, emailCount));
+            Console.WriteLine($"Page {pageNumber}: Time taken to process {emailCount} messages: {elapsedTime} ms");
+            Debug.WriteLine($"Page {pageNumber}: Time taken to process {emailCount} messages: {elapsedTime} ms");
+
+            return emailCount;
         }
 
         private static async Task Main(string[] args)
@@ -88,6 +89,8 @@ namespace EmailParser
             var scopes = new[] { "Mail.Read" };
             var graphClient = new GraphServiceClient(credential, scopes);
 
+            var stopwatchBag = new ConcurrentBag<(int PageNumber, long ElapsedTime, int EmailCount)>();
+
             try
             {
                 // Ensure the email directory exists
@@ -100,8 +103,6 @@ namespace EmailParser
                 var startDateString = startDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var endDateString = endDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
-             
-
                 // Fetch the first page of messages
                 var messagePage = await graphClient.Me.Messages
                     .GetAsync(requestConfiguration =>
@@ -113,14 +114,14 @@ namespace EmailParser
 
                 // Process messages and handle pagination
                 int pageNumber = 1;
+                long totalEmailCount = 0;
 
                 while (messagePage != null)
                 {
                     if (messagePage.Value != null)
                     {
-                        var currentPage = messagePage;
-                        var currentPageNumber = pageNumber;
-                        Task.Run(async () => await ProcessMessagePageAsync(currentPage.Value, emailDirectory, currentPageNumber));
+                        var emailCount = await ProcessMessagePageAsync(messagePage.Value, emailDirectory, pageNumber, stopwatchBag);
+                        totalEmailCount += messagePage.OdataCount.Value;
                         pageNumber++;
                     }
 
@@ -140,9 +141,22 @@ namespace EmailParser
                     }
                 }
 
-              
-
                 Console.WriteLine("Emails have been saved.");
+                long totalElapsedTime = 0;
+                int totalEmails;
+                // Output the collected stopwatch values
+                foreach (var entry in stopwatchBag.OrderBy(e => e.PageNumber))
+                {
+                    Console.WriteLine($"Page {entry.PageNumber}: {entry.EmailCount} emails processed in {entry.ElapsedTime} ms");
+                    Debug.WriteLine($"Page {entry.PageNumber}: {entry.EmailCount} emails processed in {entry.ElapsedTime} ms");
+                    totalElapsedTime = entry.ElapsedTime;
+                    totalEmailCount = entry.EmailCount;
+                }
+                totalElapsedTime = stopwatchBag.Sum(entry => entry.ElapsedTime);
+                Console.WriteLine($"Total time taken to process all pages: {totalElapsedTime} ms");
+                Debug.WriteLine($"Total time taken to process all pages: {totalElapsedTime} ms");
+                Console.WriteLine($"Total number of emails processed: {totalEmailCount}");
+                Debug.WriteLine($"Total number of emails processed: {totalEmailCount}");
             }
             catch (Exception ex)
             {
