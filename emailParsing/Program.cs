@@ -7,6 +7,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using System.Diagnostics;
+using System.Collections.Concurrent;
 
 namespace EmailParser
 {
@@ -22,7 +23,6 @@ namespace EmailParser
             return Regex.Replace(input, "<!--.*?-->", string.Empty, RegexOptions.Singleline);
         }
 
-
         private static string StripHtml(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -33,6 +33,7 @@ namespace EmailParser
             // Remove HTML tags using a regular expression
             return Regex.Replace(input, "<.*?>", string.Empty);
         }
+
         private static async Task ProcessMessageAsync(Message message, string emailDirectory)
         {
             var subject = message.Subject ?? "(No Subject)";
@@ -45,6 +46,23 @@ namespace EmailParser
 
             await File.WriteAllTextAsync(fileName, emailContent);
         }
+
+        private static async Task ProcessMessagePageAsync(IList<Message> messages, string emailDirectory, int pageNumber)
+        {
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+
+            foreach (var item in messages)
+            {
+                ProcessMessageAsync(item, emailDirectory);
+                
+            } 
+           
+            var elapsedTime = stopwatch.ElapsedMilliseconds;
+            Console.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
+            Debug.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
+        }
+
         private static async Task Main(string[] args)
         {
             // Replace with your actual client ID
@@ -82,6 +100,8 @@ namespace EmailParser
                 var startDateString = startDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var endDateString = endDate.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
+             
+
                 // Fetch the first page of messages
                 var messagePage = await graphClient.Me.Messages
                     .GetAsync(requestConfiguration =>
@@ -92,35 +112,17 @@ namespace EmailParser
                     });
 
                 // Process messages and handle pagination
-
                 int pageNumber = 1;
 
                 while (messagePage != null)
                 {
                     if (messagePage.Value != null)
                     {
-                        var stopwatch = new Stopwatch();
-                        stopwatch.Start();
-
-                        foreach (var message in messagePage.Value)
-                        {
-                            await ProcessMessageAsync(message, emailDirectory);
-                        }
-
-                        stopwatch.Stop();
-                        var elapsedTime = stopwatch.ElapsedMilliseconds;
-                        Console.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
-                        Debug.WriteLine($"Page {pageNumber}: Time taken to process messages: {elapsedTime} ms");
-
+                        var currentPage = messagePage;
+                        var currentPageNumber = pageNumber;
+                        Task.Run(async () => await ProcessMessagePageAsync(currentPage.Value, emailDirectory, currentPageNumber));
                         pageNumber++;
                     }
-
-
-
-
-
-
-
 
                     // Get the next page of messages, if any
                     if (!string.IsNullOrEmpty(messagePage.OdataNextLink))
@@ -137,6 +139,8 @@ namespace EmailParser
                         messagePage = null;
                     }
                 }
+
+              
 
                 Console.WriteLine("Emails have been saved.");
             }
